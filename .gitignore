@@ -5,3 +5,10 @@ dist
 .agents
 .claude
 .codex
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
