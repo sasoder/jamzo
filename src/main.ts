@@ -4,7 +4,7 @@ import { MenuScene } from './scenes/MenuScene';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
-  backgroundColor: '#101014',
+  backgroundColor: '#0f0e1a',
   fps: {
     target: 60,
     limit: 60,
@@ -18,4 +18,17 @@ const config: Phaser.Types.Core.GameConfig = {
   scene: [MenuScene, GameScene],
 };
 
-new Phaser.Game(config);
+async function start() {
+  try {
+    await Promise.all([
+      document.fonts.load('16px "Press Start 2P"'),
+      document.fonts.load('16px "VT323"'),
+      document.fonts.load('32px "VT323"'),
+    ]);
+  } catch {
+    // continue with fallbacks if loading fails
+  }
+  new Phaser.Game(config);
+}
+
+start();

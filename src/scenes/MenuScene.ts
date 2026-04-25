@@ -1,13 +1,14 @@
 import * as Phaser from 'phaser';
-import { COLORS, FONT } from '../theme';
-import { makeButton, type Button } from '../ui/button';
+import { COLORS, FONT, FONT_DISPLAY } from '../theme';
 import { addText } from '../ui/text';
 
 export class MenuScene extends Phaser.Scene {
   private title!: Phaser.GameObjects.Text;
   private subtitle!: Phaser.GameObjects.Text;
-  private startButton!: Button;
+  private hint!: Phaser.GameObjects.Text;
+  private credit!: Phaser.GameObjects.Text;
   private backdrop!: Phaser.GameObjects.Rectangle;
+  private vignette!: Phaser.GameObjects.Rectangle;
 
   constructor() {
     super('MenuScene');
@@ -15,41 +16,72 @@ export class MenuScene extends Phaser.Scene {
 
   create() {
     this.backdrop = this.add.rectangle(0, 0, 10, 10, COLORS.background);
-    this.title = addText(this, 0, 0, 'NECROMANCER', {
-      fontFamily: FONT,
-      fontSize: '72px',
-      color: COLORS.text,
-      fontStyle: '800',
+    this.vignette = this.add.rectangle(0, 0, 10, 10, 0x000000, 0).setBlendMode(Phaser.BlendModes.MULTIPLY);
+
+    this.title = addText(this, 0, 0, 'REVIVE', {
+      fontFamily: FONT_DISPLAY,
+      fontSize: '64px',
+      color: '#facc15',
     }).setOrigin(0.5);
 
-    this.subtitle = addText(this, 0, 0, 'type the letter to revive', {
+    this.tweens.add({
+      targets: this.title,
+      y: '+=8',
+      duration: 1600,
+      yoyo: true,
+      repeat: -1,
+      ease: 'sine.inOut',
+    });
+
+    this.subtitle = addText(this, 0, 0, 'type letters to keep your heroes fighting', {
+      fontFamily: FONT,
+      fontSize: '32px',
+      color: COLORS.text,
+    }).setOrigin(0.5);
+
+    this.hint = addText(this, 0, 0, 'press SPACE to begin', {
+      fontFamily: FONT,
+      fontSize: '28px',
+      color: COLORS.muted,
+    }).setOrigin(0.5);
+
+    this.tweens.add({
+      targets: this.hint,
+      alpha: { from: 0.4, to: 1 },
+      duration: 900,
+      yoyo: true,
+      repeat: -1,
+      ease: 'sine.inOut',
+    });
+
+    this.credit = addText(this, 0, 0, 'ld jam 59  //  theme: revive', {
       fontFamily: FONT,
       fontSize: '20px',
       color: COLORS.muted,
     }).setOrigin(0.5);
 
-    this.startButton = makeButton(this, 0, 0, 'Start', () => this.scene.start('GameScene'));
-    this.input.keyboard?.once('keydown-SPACE', () => this.scene.start('GameScene'));
-    this.input.keyboard?.once('keydown-ENTER', () => this.scene.start('GameScene'));
+    const start = () => this.scene.start('GameScene');
+    this.input.keyboard?.once('keydown-SPACE', start);
+    this.input.keyboard?.once('keydown-ENTER', start);
+    this.input.once('pointerdown', start);
 
     this.scale.on('resize', this.layout, this);
+    this.events.once('shutdown', () => this.scale.off('resize', this.layout, this));
     this.layout();
-  }
-
-  shutdown() {
-    this.scale.off('resize', this.layout, this);
   }
 
   private layout() {
     const { width, height } = this.scale;
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const titleSize = Math.round(Phaser.Math.Clamp(width * 0.078, 36, 72));
+    const cx = width / 2;
+    const cy = height / 2;
+    const titleSize = Math.round(Phaser.Math.Clamp(width * 0.07, 32, 80));
 
-    this.backdrop.setPosition(centerX, centerY).setSize(width, height);
-    this.title.setPosition(centerX, centerY - 104).setFontSize(titleSize);
-    this.subtitle.setPosition(centerX, centerY - 32);
-    this.startButton.setPosition(centerX, centerY + 64);
-    this.startButton.setSize(Math.min(240, width - 48), 64);
+    this.backdrop.setPosition(cx, cy).setSize(width, height);
+    this.vignette.setPosition(cx, cy).setSize(width, height);
+
+    this.title.setPosition(cx, cy - 110).setFontSize(titleSize);
+    this.subtitle.setPosition(cx, cy - 20);
+    this.hint.setPosition(cx, cy + 60);
+    this.credit.setPosition(cx, height - 30);
   }
 }
