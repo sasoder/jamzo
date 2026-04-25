@@ -2,631 +2,380 @@ import * as Phaser from 'phaser';
 import { COLORS, FONT } from '../theme';
 import { addText } from '../ui/text';
 
-type PlayState = 'intro' | 'rescue';
-type HeroKind = 'knight' | 'wizard';
-type HeroPhase = 'running' | 'falling' | 'carried' | 'lift';
+type FallerKind = 'hero' | 'tank';
 
-type Hero = {
-  kind: HeroKind;
-  phase: HeroPhase;
-  gfx: Phaser.GameObjects.Graphics;
+type Faller = {
+  container: Phaser.GameObjects.Container;
+  bg: Phaser.GameObjects.Rectangle;
+  letterTexts: Phaser.GameObjects.Text[];
+  letters: string;
+  typedCount: number;
   x: number;
   y: number;
   vx: number;
   vy: number;
-  value: number;
+  kind: FallerKind;
+  baseValue: number;
 };
 
-type UpgradeButton = {
-  bg: Phaser.GameObjects.Rectangle;
-  label: Phaser.GameObjects.Text;
-  refresh: () => void;
-  setPosition: (x: number, y: number, width: number) => void;
-};
-
-const UI_DEPTH = 30;
+const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const COMBO_WINDOW_MS = 1500;
+const GRAVITY = 95;
+const HERO_BASE_VALUE = 10;
+const TANK_BASE_VALUE = 25;
+const STARTING_LIVES = 3;
+const PARTICLE_KEY = 'p_particle';
 
 export class GameScene extends Phaser.Scene {
-  private state: PlayState = 'intro';
-  private world!: Phaser.GameObjects.Graphics;
-  private catcher!: Phaser.GameObjects.Graphics;
-  private lift!: Phaser.GameObjects.Graphics;
-  private introHero?: Phaser.GameObjects.Graphics;
-  private title!: Phaser.GameObjects.Text;
-  private status!: Phaser.GameObjects.Text;
-  private stats!: Phaser.GameObjects.Text;
-  private liftText!: Phaser.GameObjects.Text;
-  private modeText!: Phaser.GameObjects.Text;
+  private fallers: Faller[] = [];
+  private score = 0;
+  private lives = STARTING_LIVES;
+  private combo = 0;
+  private highCombo = 0;
+  private comboTimer = 0;
+  private spawnTimer = 800;
+  private waveCooldown = 16000;
+  private waveActive = false;
+  private waveTimeLeft = 0;
+  private elapsed = 0;
+  private over = false;
 
-  private keyA?: Phaser.Input.Keyboard.Key;
-  private keyD?: Phaser.Input.Keyboard.Key;
-  private keyLeft?: Phaser.Input.Keyboard.Key;
-  private keyRight?: Phaser.Input.Keyboard.Key;
-  private keySpace?: Phaser.Input.Keyboard.Key;
+  private scoreText!: Phaser.GameObjects.Text;
+  private livesText!: Phaser.GameObjects.Text;
+  private comboText!: Phaser.GameObjects.Text;
+  private waveText!: Phaser.GameObjects.Text;
+  private overText!: Phaser.GameObjects.Text;
+  private restartHint!: Phaser.GameObjects.Text;
 
-  private heroes: Hero[] = [];
-  private carried: Hero[] = [];
-  private liftQueue: Hero[] = [];
-  private upgradeButtons: UpgradeButton[] = [];
-
-  private gold = 0;
-  private revived = 0;
-  private missed = 0;
-  private spawnTimer = 0;
-  private liftProgress = 0;
-
-  private introX = 92;
-  private introY = 0;
-  private introVy = 0;
-  private introFalling = false;
-
-  private catcherX = 0;
-  private catcherY = 0;
-  private pointerTargetX = 0;
-  private netRadius = 32;
-  private carryCapacity = 1;
-  private liftCapacity = 2;
-  private liftSpeed = 1;
-
-  private platformY = 0;
-  private underworldY = 0;
-  private pitStart = 0;
-  private pitEnd = 0;
-  private liftX = 0;
+  private fx!: Phaser.GameObjects.Particles.ParticleEmitter;
 
   constructor() {
     super('GameScene');
   }
 
   create() {
-    this.resetRun();
+    this.makeParticleTexture();
 
-    this.world = this.add.graphics();
-    this.catcher = this.add.graphics().setDepth(8);
-    this.lift = this.add.graphics().setDepth(7);
+    this.fx = this.add
+      .particles(0, 0, PARTICLE_KEY, {
+        speed: { min: 90, max: 280 },
+        lifespan: { min: 350, max: 750 },
+        scale: { start: 1.4, end: 0 },
+        alpha: { start: 1, end: 0 },
+        gravityY: 220,
+        emitting: false,
+        blendMode: 'ADD',
+      })
+      .setDepth(20);
 
-    this.title = addText(this, 24, 20, 'Respawn Department', {
+    this.scoreText = addText(this, 24, 20, '', {
       fontFamily: FONT,
-      fontSize: '22px',
+      fontSize: '24px',
       color: COLORS.text,
       fontStyle: '800',
-    }).setDepth(UI_DEPTH);
+    }).setDepth(30);
 
-    this.status = addText(this, 24, 48, 'A promising hero enters the level.', {
+    this.livesText = addText(this, 0, 20, '', {
       fontFamily: FONT,
-      fontSize: '15px',
-      color: '#c7d2fe',
-    }).setDepth(UI_DEPTH);
-
-    this.stats = addText(this, 24, 78, '', {
-      fontFamily: FONT,
-      fontSize: '17px',
-      color: COLORS.text,
-      fontStyle: '700',
-    }).setDepth(UI_DEPTH);
-
-    this.modeText = addText(this, 0, 0, 'Reach the flag. It is definitely a normal platformer.', {
-      fontFamily: FONT,
-      fontSize: '16px',
-      color: '#f8fafc',
-      align: 'center',
-      wordWrap: { width: 440 },
+      fontSize: '24px',
+      color: '#fca5a5',
+      fontStyle: '800',
     })
-      .setOrigin(0.5)
-      .setDepth(UI_DEPTH);
+      .setOrigin(1, 0)
+      .setDepth(30);
 
-    this.liftText = addText(this, 0, 0, '', {
+    this.comboText = addText(this, 0, 0, '', {
       fontFamily: FONT,
-      fontSize: '14px',
-      color: '#0f172a',
-      fontStyle: '800',
+      fontSize: '40px',
+      color: '#fde047',
+      fontStyle: '900',
       align: 'center',
     })
       .setOrigin(0.5)
-      .setDepth(9);
+      .setDepth(30);
 
-    this.createUpgradeButtons();
+    this.waveText = addText(this, 0, 0, '', {
+      fontFamily: FONT,
+      fontSize: '44px',
+      color: '#f472b6',
+      fontStyle: '900',
+      align: 'center',
+    })
+      .setOrigin(0.5)
+      .setDepth(30);
 
-    this.keyA = this.input.keyboard?.addKey('A');
-    this.keyD = this.input.keyboard?.addKey('D');
-    this.keyLeft = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.LEFT);
-    this.keyRight = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.RIGHT);
-    this.keySpace = this.input.keyboard?.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    this.overText = addText(this, 0, 0, '', {
+      fontFamily: FONT,
+      fontSize: '64px',
+      color: '#f87171',
+      fontStyle: '900',
+      align: 'center',
+    })
+      .setOrigin(0.5)
+      .setDepth(30)
+      .setVisible(false);
 
-    this.input.on('pointermove', this.handlePointerMove, this);
-    this.input.on('pointerdown', this.handlePointerMove, this);
+    this.restartHint = addText(this, 0, 0, '', {
+      fontFamily: FONT,
+      fontSize: '20px',
+      color: COLORS.muted,
+      align: 'center',
+    })
+      .setOrigin(0.5)
+      .setDepth(30)
+      .setVisible(false);
+
+    this.input.keyboard?.on('keydown', this.handleKey, this);
     this.scale.on('resize', this.layout, this);
-    this.events.once('shutdown', this.shutdown, this);
+    this.events.once('shutdown', this.cleanup, this);
 
-    this.introHero = this.drawHero('knight', 0, 0).setDepth(6);
     this.layout();
-    this.updateStats();
+    this.refreshHud();
   }
 
   update(_time: number, deltaMs: number) {
+    if (this.over) return;
     const dt = Math.min(deltaMs / 1000, 0.04);
+    this.elapsed += deltaMs;
 
-    if (this.state === 'intro') {
-      this.updateIntro(dt);
-      return;
+    this.spawnTimer -= deltaMs;
+    if (this.spawnTimer <= 0) {
+      this.spawn();
+      const base = Math.max(420, 1100 - this.score * 0.5);
+      this.spawnTimer = this.waveActive ? base / 2.6 : base;
     }
 
-    this.updateCatcher(dt);
-    this.updateSpawner(deltaMs);
-    this.updateHeroes(dt);
-    this.updateLift(dt);
-    this.drawCatcher();
-    this.drawLift();
+    if (this.waveActive) {
+      this.waveTimeLeft -= deltaMs;
+      if (this.waveTimeLeft <= 0) {
+        this.waveActive = false;
+        this.waveText.setText('');
+      }
+    } else {
+      this.waveCooldown -= deltaMs;
+      if (this.waveCooldown <= 0) this.startWave();
+    }
+
+    if (this.combo > 0) {
+      this.comboTimer -= deltaMs;
+      if (this.comboTimer <= 0) {
+        this.combo = 0;
+        this.refreshHud();
+      }
+    }
+
+    const w = this.scale.width;
+    for (const f of this.fallers) {
+      f.vy += GRAVITY * dt;
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+      if (f.x < 30) {
+        f.x = 30;
+        f.vx = Math.abs(f.vx);
+      } else if (f.x > w - 30) {
+        f.x = w - 30;
+        f.vx = -Math.abs(f.vx);
+      }
+      f.container.setPosition(f.x, f.y);
+    }
+
+    for (const f of [...this.fallers]) {
+      if (f.y > this.scale.height + 40) this.loseLife(f);
+    }
   }
 
-  shutdown() {
-    this.input.off('pointermove', this.handlePointerMove, this);
-    this.input.off('pointerdown', this.handlePointerMove, this);
+  private cleanup() {
+    this.input.keyboard?.off('keydown', this.handleKey, this);
     this.scale.off('resize', this.layout, this);
   }
 
-  private resetRun() {
-    this.state = 'intro';
-    this.heroes = [];
-    this.carried = [];
-    this.liftQueue = [];
-    this.upgradeButtons = [];
-    this.gold = 0;
-    this.revived = 0;
-    this.missed = 0;
-    this.spawnTimer = 0;
-    this.liftProgress = 0;
-    this.netRadius = 32;
-    this.carryCapacity = 1;
-    this.liftCapacity = 2;
-    this.liftSpeed = 1;
-    this.introX = 92;
-    this.introVy = 0;
-    this.introFalling = false;
+  private makeParticleTexture() {
+    if (this.textures.exists(PARTICLE_KEY)) return;
+    const g = this.add.graphics();
+    g.fillStyle(0xffffff, 1);
+    g.fillCircle(4, 4, 4);
+    g.generateTexture(PARTICLE_KEY, 8, 8);
+    g.destroy();
   }
 
-  private createUpgradeButtons() {
-    this.upgradeButtons.push(
-      this.makeUpgradeButton(() => `Net radius +10  $${this.netCost()}`, () => this.gold >= this.netCost(), () => {
-        this.gold -= this.netCost();
-        this.netRadius += 10;
-      }),
-      this.makeUpgradeButton(
-        () => `Carry capacity +1  $${this.carryCost()}`,
-        () => this.gold >= this.carryCost(),
-        () => {
-          this.gold -= this.carryCost();
-          this.carryCapacity += 1;
-        },
-      ),
-      this.makeUpgradeButton(
-        () => `Lift capacity +1  $${this.liftCost()}`,
-        () => this.gold >= this.liftCost(),
-        () => {
-          this.gold -= this.liftCost();
-          this.liftCapacity += 1;
-        },
-      ),
-      this.makeUpgradeButton(
-        () => `Revive motor +25%  $${this.motorCost()}`,
-        () => this.gold >= this.motorCost(),
-        () => {
-          this.gold -= this.motorCost();
-          this.liftSpeed += 0.25;
-        },
-      ),
-    );
+  private startWave() {
+    this.waveActive = true;
+    this.waveTimeLeft = 4500;
+    this.waveCooldown = 18000 + Math.random() * 8000;
+    this.waveText.setText('!! WAVE !!');
+    this.tweens.add({
+      targets: this.waveText,
+      scale: { from: 0.6, to: 1.15 },
+      duration: 220,
+      yoyo: true,
+      repeat: 2,
+      ease: 'back.out',
+    });
   }
 
-  private makeUpgradeButton(labelText: () => string, canBuy: () => boolean, onBuy: () => void): UpgradeButton {
-    const bg = this.add
-      .rectangle(0, 0, 220, 38, 0x24313a, 0.94)
-      .setStrokeStyle(2, 0x5eead4, 0.3)
-      .setInteractive({ useHandCursor: true })
-      .setDepth(UI_DEPTH);
+  private spawn() {
+    const isTank = Math.random() < 0.22;
+    const kind: FallerKind = isTank ? 'tank' : 'hero';
+    const letterCount = isTank ? 2 : 1;
+    let letters = '';
+    while (letters.length < letterCount) {
+      const c = ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
+      if (!letters.includes(c)) letters += c;
+    }
+    const size = isTank ? 64 : 44;
+    const color = isTank ? 0x6b21a8 : 0x1e3a8a;
+    const stroke = isTank ? 0xc4b5fd : 0x93c5fd;
+    const x = Phaser.Math.Between(60, this.scale.width - 60);
+    const y = -size;
+    const vx = Phaser.Math.Between(-50, 50);
+    const vy = Phaser.Math.Between(20, 70);
 
-    const label = addText(this, 0, 0, '', {
-      fontFamily: FONT,
-      fontSize: '14px',
-      color: COLORS.text,
-      fontStyle: '800',
-    })
-      .setOrigin(0.5)
-      .setDepth(UI_DEPTH + 1);
+    const bg = this.add.rectangle(0, 0, size, size, color, 1).setStrokeStyle(3, stroke);
 
-    const refresh = () => {
-      const afford = canBuy();
-      label.setText(labelText());
-      label.setColor(afford ? COLORS.text : '#94a3b8');
-      bg.setFillStyle(afford ? 0x24423f : 0x202833, 0.94);
-      bg.setStrokeStyle(2, afford ? 0x5eead4 : 0x475569, afford ? 0.7 : 0.35);
-    };
+    const letterTexts: Phaser.GameObjects.Text[] = [];
+    if (isTank) {
+      letterTexts.push(this.makeLetter(letters[0], -16));
+      letterTexts.push(this.makeLetter(letters[1], 16));
+    } else {
+      letterTexts.push(this.makeLetter(letters[0], 0));
+    }
 
-    bg.on('pointerover', () => {
-      if (canBuy()) bg.setFillStyle(0x2c5a52, 0.98);
-    });
-    bg.on('pointerout', refresh);
-    bg.on('pointerdown', () => {
-      if (!canBuy()) return;
-      onBuy();
-      this.updateStats();
-      this.drawCatcher();
-      this.drawLift();
-      this.tweens.add({ targets: [bg, label], scale: 0.96, duration: 60, yoyo: true });
-    });
+    const container = this.add.container(x, y, [bg, ...letterTexts]).setDepth(10);
 
-    return {
+    this.fallers.push({
+      container,
       bg,
-      label,
-      refresh,
-      setPosition(x: number, y: number, width: number) {
-        bg.setPosition(x, y).setSize(width, 38).setDisplaySize(width, 38);
-        label.setPosition(x, y);
-        label.setFontSize(Math.round(Phaser.Math.Clamp(width * 0.064, 11, 14)));
-      },
-    };
-  }
-
-  private updateIntro(dt: number) {
-    const movingRight = this.keyD?.isDown || this.keyRight?.isDown;
-    const movingLeft = this.keyA?.isDown || this.keyLeft?.isDown;
-    const speed = 185;
-
-    if (!this.introFalling) {
-      if (movingRight) this.introX += speed * dt;
-      if (movingLeft) this.introX -= speed * dt;
-      if (this.keySpace && Phaser.Input.Keyboard.JustDown(this.keySpace)) {
-        this.introVy = -420;
-      }
-
-      const overPit = this.introX > this.pitStart && this.introX < this.pitEnd;
-      const closeToFlag = this.introX > this.scale.width - 150;
-      if (overPit || closeToFlag || this.introVy !== 0) {
-        this.introY += this.introVy * dt;
-        this.introVy += 980 * dt;
-      }
-
-      if (!overPit && !closeToFlag && this.introY >= this.platformY - 20) {
-        this.introY = this.platformY - 20;
-        this.introVy = 0;
-      }
-
-      if (overPit && this.introY > this.platformY + 10) {
-        this.introFalling = true;
-        this.status.setText('The first hero has encountered gravity.');
-      }
-    } else {
-      this.introY += this.introVy * dt;
-      this.introVy += 1040 * dt;
-    }
-
-    this.introX = Phaser.Math.Clamp(this.introX, 46, this.scale.width - 44);
-    this.introHero?.setPosition(this.introX, this.introY);
-
-    if (this.introY > this.underworldY + 30) {
-      this.startRescueLoop(this.introX, this.introY, this.introVy);
-    }
-  }
-
-  private startRescueLoop(x: number, y: number, vy: number) {
-    this.state = 'rescue';
-    this.modeText.setText('CATCH FALLING HEROES. FEED THE LIFT.');
-    this.status.setText('The real job begins below the level.');
-    this.introHero?.destroy();
-    this.introHero = undefined;
-    this.spawnTimer = 450;
-    this.createHero('knight', x, y, 'falling', vy);
-    this.updateStats();
-  }
-
-  private updateCatcher(dt: number) {
-    const keyboardDir =
-      (this.keyD?.isDown || this.keyRight?.isDown ? 1 : 0) - (this.keyA?.isDown || this.keyLeft?.isDown ? 1 : 0);
-    const speed = 430;
-
-    if (keyboardDir !== 0) {
-      this.catcherX += keyboardDir * speed * dt;
-      this.pointerTargetX = this.catcherX;
-    } else {
-      this.catcherX = Phaser.Math.Linear(this.catcherX, this.pointerTargetX, 1 - Math.pow(0.0007, dt));
-    }
-
-    this.catcherX = Phaser.Math.Clamp(this.catcherX, 42, this.scale.width - 42);
-    this.depositCarriedHeroes();
-    this.positionCarriedHeroes();
-  }
-
-  private updateSpawner(deltaMs: number) {
-    this.spawnTimer -= deltaMs;
-    if (this.spawnTimer > 0) return;
-
-    const nextDelay = Phaser.Math.Clamp(1350 - this.revived * 12, 520, 1350);
-    this.spawnTimer = nextDelay;
-    const kind: HeroKind = Math.random() < 0.58 ? 'knight' : 'wizard';
-    this.createHero(kind, -32, this.platformY - 20, 'running', 0);
-  }
-
-  private updateHeroes(dt: number) {
-    for (const hero of this.heroes) {
-      if (hero.phase === 'running') {
-        hero.x += hero.vx * dt;
-        hero.y = this.platformY - 20 + Math.sin(hero.x * 0.055) * 2;
-        if (hero.x > this.pitStart + 12) {
-          hero.phase = 'falling';
-          hero.vy = hero.kind === 'knight' ? 110 : 20;
-        }
-      }
-
-      if (hero.phase === 'falling') {
-        const gravity = hero.kind === 'knight' ? 760 : 245;
-        const maxFall = hero.kind === 'knight' ? 520 : 165;
-        hero.vy = Math.min(maxFall, hero.vy + gravity * dt);
-        hero.y += hero.vy * dt;
-
-        const distance = Phaser.Math.Distance.Between(hero.x, hero.y, this.catcherX, this.catcherY - 18);
-        if (distance < this.netRadius && this.carried.length < this.carryCapacity) {
-          hero.phase = 'carried';
-          hero.vy = 0;
-          this.carried.push(hero);
-          this.tweens.add({ targets: hero.gfx, scale: 1.18, duration: 70, yoyo: true });
-          this.updateStats();
-        } else if (hero.y > this.scale.height + 42) {
-          this.missed += 1;
-          this.destroyHero(hero);
-          this.updateStats();
-          continue;
-        }
-      }
-
-      if (hero.phase !== 'carried') {
-        hero.gfx.setPosition(hero.x, hero.y);
-      }
-    }
-  }
-
-  private updateLift(dt: number) {
-    if (this.liftQueue.length === 0) {
-      this.liftProgress = 0;
-      this.drawLift();
-      return;
-    }
-
-    this.liftProgress += (dt * this.liftSpeed) / 1.65;
-    if (this.liftProgress >= 1) {
-      const payout = this.liftQueue.reduce((total, hero) => total + hero.value, 0);
-      this.gold += payout;
-      this.revived += this.liftQueue.length;
-      for (const hero of this.liftQueue) this.destroyHero(hero);
-      this.liftQueue = [];
-      this.liftProgress = 0;
-      this.status.setText(`Lift sent them back up. +$${payout}`);
-      this.updateStats();
-    }
-
-    this.positionLiftHeroes();
-    this.drawLift();
-  }
-
-  private depositCarriedHeroes() {
-    if (Math.abs(this.catcherX - this.liftX) > 72) return;
-    while (this.carried.length > 0 && this.liftQueue.length < this.liftCapacity) {
-      const hero = this.carried.shift();
-      if (!hero) return;
-      hero.phase = 'lift';
-      this.liftQueue.push(hero);
-      this.tweens.add({ targets: hero.gfx, scale: 0.92, duration: 90, yoyo: true });
-    }
-    this.positionCarriedHeroes();
-    this.positionLiftHeroes();
-    this.updateStats();
-  }
-
-  private positionCarriedHeroes() {
-    this.carried.forEach((hero, index) => {
-      const rowOffset = (index - (this.carried.length - 1) / 2) * 22;
-      hero.x = this.catcherX + rowOffset;
-      hero.y = this.catcherY - 38 - Math.floor(index / 3) * 18;
-      hero.gfx.setPosition(hero.x, hero.y);
-    });
-  }
-
-  private positionLiftHeroes() {
-    this.liftQueue.forEach((hero, index) => {
-      const xOffset = (index % 3) * 22 - Math.min(this.liftQueue.length - 1, 2) * 11;
-      const yOffset = Math.floor(index / 3) * 19;
-      hero.x = this.liftX + xOffset;
-      hero.y = this.catcherY - 82 + yOffset - this.liftProgress * 44;
-      hero.gfx.setPosition(hero.x, hero.y);
-    });
-  }
-
-  private createHero(kind: HeroKind, x: number, y: number, phase: HeroPhase, vy: number): Hero {
-    const hero: Hero = {
-      kind,
-      phase,
-      gfx: this.drawHero(kind, x, y).setDepth(6),
+      letterTexts,
+      letters,
+      typedCount: 0,
       x,
       y,
-      vx: kind === 'knight' ? 94 : 116,
+      vx,
       vy,
-      value: 3,
-    };
-    this.heroes.push(hero);
-    return hero;
+      kind,
+      baseValue: isTank ? TANK_BASE_VALUE : HERO_BASE_VALUE,
+    });
   }
 
-  private destroyHero(hero: Hero) {
-    hero.gfx.destroy();
-    this.heroes = this.heroes.filter((candidate) => candidate !== hero);
-    this.carried = this.carried.filter((candidate) => candidate !== hero);
-    this.liftQueue = this.liftQueue.filter((candidate) => candidate !== hero);
+  private makeLetter(ch: string, offsetX: number) {
+    return addText(this, offsetX, 0, ch, {
+      fontFamily: FONT,
+      fontSize: '28px',
+      color: '#f8fafc',
+      fontStyle: '900',
+    }).setOrigin(0.5);
   }
 
-  private drawHero(kind: HeroKind, x: number, y: number) {
-    const gfx = this.add.graphics({ x, y });
-    const body = kind === 'knight' ? 0x93c5fd : 0xc084fc;
-    const trim = kind === 'knight' ? 0xe2e8f0 : 0xfde68a;
-
-    gfx.lineStyle(2, 0x111827, 1);
-    if (kind === 'wizard') {
-      gfx.fillStyle(trim, 1);
-      gfx.fillTriangle(-10, -24, 0, -43, 10, -24);
-      gfx.strokeTriangle(-10, -24, 0, -43, 10, -24);
+  private handleKey = (event: KeyboardEvent) => {
+    if (this.over) {
+      if (event.key === ' ' || event.key === 'Enter') this.scene.restart();
+      return;
     }
-    gfx.fillStyle(0xf9c7a5, 1);
-    gfx.fillCircle(0, -20, 7);
-    gfx.strokeCircle(0, -20, 7);
-    gfx.fillStyle(body, 1);
-    gfx.fillRoundedRect(-8, -13, 16, 22, 4);
-    gfx.strokeRoundedRect(-8, -13, 16, 22, 4);
-    gfx.lineStyle(3, trim, 1);
-    gfx.lineBetween(-8, -3, 8, -3);
-    if (kind === 'knight') {
-      gfx.fillStyle(0xb7c4d8, 1);
-      gfx.fillRoundedRect(-15, -8, 7, 15, 2);
-      gfx.lineStyle(2, 0x111827, 1);
-      gfx.strokeRoundedRect(-15, -8, 7, 15, 2);
-    } else {
-      gfx.fillStyle(0xfde68a, 1);
-      gfx.fillCircle(9, -19, 2.5);
+    const key = event.key.toUpperCase();
+    if (!/^[A-Z]$/.test(key)) return;
+
+    let target: Faller | undefined;
+    let lowestY = -Infinity;
+    for (const f of this.fallers) {
+      const next = f.letters[f.typedCount];
+      if (next === key && f.y > lowestY) {
+        lowestY = f.y;
+        target = f;
+      }
     }
-    return gfx;
+    if (!target) return;
+
+    const idx = target.typedCount;
+    target.letterTexts[idx].setColor('#22c55e');
+    target.typedCount = idx + 1;
+    this.tweens.add({
+      targets: target.letterTexts[idx],
+      scale: { from: 1.6, to: 1 },
+      duration: 160,
+      ease: 'back.out',
+    });
+
+    if (target.typedCount >= target.letters.length) this.revive(target);
+  };
+
+  private revive(f: Faller) {
+    const multiplier = Math.max(1, this.combo);
+    const points = f.baseValue * multiplier;
+    this.score += points;
+    this.combo += 1;
+    this.comboTimer = COMBO_WINDOW_MS;
+    if (this.combo > this.highCombo) this.highCombo = this.combo;
+
+    this.fx.setParticleTint(this.comboColor());
+    this.fx.explode(20 + this.combo * 2, f.x, f.y);
+
+    const popup = addText(this, f.x, f.y, `+${points}`, {
+      fontFamily: FONT,
+      fontSize: '26px',
+      color: multiplier > 1 ? '#fde047' : '#a7f3d0',
+      fontStyle: '900',
+    })
+      .setOrigin(0.5)
+      .setDepth(25);
+    this.tweens.add({
+      targets: popup,
+      y: f.y - 70,
+      alpha: 0,
+      duration: 750,
+      ease: 'cubic.out',
+      onComplete: () => popup.destroy(),
+    });
+
+    if (this.combo >= 3) this.cameras.main.flash(80, 253, 224, 71, false);
+
+    f.container.destroy();
+    this.fallers = this.fallers.filter((x) => x !== f);
+    this.refreshHud();
   }
 
-  private handlePointerMove(pointer: Phaser.Input.Pointer) {
-    this.pointerTargetX = pointer.x;
-    if (this.state === 'intro' && pointer.isDown) {
-      this.introX = pointer.x;
-    }
+  private comboColor(): number {
+    if (this.combo >= 10) return 0xf472b6;
+    if (this.combo >= 5) return 0xfde047;
+    if (this.combo >= 3) return 0x60a5fa;
+    return 0xa7f3d0;
   }
 
-  private updateStats() {
-    this.stats.setText(
-      `Gold $${this.gold}   Revived ${this.revived}   Lost ${this.missed}   Carry ${this.carried.length}/${this.carryCapacity}`,
-    );
-    this.liftText.setText(`${this.liftQueue.length}/${this.liftCapacity}`);
-    for (const button of this.upgradeButtons) button.refresh();
+  private loseLife(f: Faller) {
+    this.lives -= 1;
+    this.combo = 0;
+    this.fx.setParticleTint(0xef4444);
+    this.fx.explode(18, f.x, this.scale.height - 20);
+    this.cameras.main.shake(200, 0.014);
+    f.container.destroy();
+    this.fallers = this.fallers.filter((x) => x !== f);
+    this.refreshHud();
+    if (this.lives <= 0) this.endGame();
+  }
+
+  private endGame() {
+    this.over = true;
+    this.overText.setText('GAME OVER').setVisible(true);
+    this.restartHint
+      .setText(`Score ${this.score}    Best Combo x${this.highCombo}\nPress SPACE to restart`)
+      .setVisible(true);
+    for (const f of this.fallers) f.container.destroy();
+    this.fallers = [];
+    this.comboText.setText('');
+  }
+
+  private refreshHud() {
+    this.scoreText.setText(`Score ${this.score}`);
+    this.livesText.setText(`Lives ${Math.max(0, this.lives)}`);
+    this.comboText.setText(this.combo > 1 ? `x${this.combo} COMBO` : '');
   }
 
   private layout() {
     const { width, height } = this.scale;
-    this.platformY = Math.round(Phaser.Math.Clamp(height * 0.26, 112, 178));
-    this.underworldY = this.platformY + 48;
-    this.pitStart = Math.round(width * 0.43);
-    this.pitEnd = this.pitStart + Math.round(Phaser.Math.Clamp(width * 0.17, 92, 164));
-    this.catcherY = height - 82;
-    this.liftX = width - Math.round(Phaser.Math.Clamp(width * 0.14, 84, 132));
-    this.catcherX = this.catcherX || width * 0.5;
-    this.pointerTargetX = this.pointerTargetX || this.catcherX;
-    this.introY = this.introY || this.platformY - 20;
-
-    this.drawWorld();
-    this.drawCatcher();
-    this.drawLift();
-
-    this.modeText.setPosition(width / 2, this.platformY - 74);
-    this.modeText.setWordWrapWidth(Math.min(460, width - 48));
-    this.liftText.setPosition(this.liftX, this.catcherY - 118);
-
-    const sidePanelWidth = Math.round(Phaser.Math.Clamp(width * 0.28, 184, 250));
-    const buttonX = Math.max(116, width - sidePanelWidth / 2 - 18);
-    const startY = Math.min(height - 208, this.underworldY + 48);
-    this.upgradeButtons.forEach((button, index) => {
-      button.setPosition(buttonX, startY + index * 46, sidePanelWidth);
-    });
-
-    this.title.setPosition(24, 18);
-    this.status.setPosition(24, 47);
-    this.stats.setPosition(24, 76);
-    this.introHero?.setPosition(this.introX, this.introY);
-  }
-
-  private drawWorld() {
-    const { width, height } = this.scale;
-    this.world.clear();
-
-    this.world.fillGradientStyle(0x172554, 0x1e3a8a, 0x334155, 0x14532d, 1, 1, 1, 1);
-    this.world.fillRect(0, 0, width, this.underworldY);
-
-    this.world.fillStyle(0x15151b, 1);
-    this.world.fillRect(0, this.underworldY, width, height - this.underworldY);
-
-    this.world.fillStyle(0x365314, 1);
-    this.world.fillRect(0, this.platformY, this.pitStart, 24);
-    this.world.fillRect(this.pitEnd, this.platformY, width - this.pitEnd, 24);
-    this.world.fillStyle(0x84cc16, 1);
-    this.world.fillRect(0, this.platformY, this.pitStart, 5);
-    this.world.fillRect(this.pitEnd, this.platformY, width - this.pitEnd, 5);
-
-    this.world.fillStyle(0x0f172a, 1);
-    this.world.fillRect(this.pitStart, this.platformY - 3, this.pitEnd - this.pitStart, 31);
-
-    this.world.fillStyle(0xfacc15, 1);
-    this.world.fillRect(width - 76, this.platformY - 60, 5, 60);
-    this.world.fillTriangle(width - 71, this.platformY - 60, width - 31, this.platformY - 46, width - 71, this.platformY - 32);
-
-    this.world.lineStyle(4, 0x475569, 1);
-    this.world.lineBetween(0, this.underworldY, width, this.underworldY);
-    this.world.lineStyle(1, 0x334155, 0.55);
-    for (let x = 32; x < width; x += 58) {
-      this.world.lineBetween(x, this.underworldY, x - 38, height);
-    }
-
-    this.world.fillStyle(0x1f2937, 1);
-    this.world.fillRect(this.liftX - 48, this.catcherY - 150, 96, 156);
-    this.world.fillStyle(0x111827, 1);
-    this.world.fillRect(this.liftX - 34, this.catcherY - 138, 68, 110);
-    this.world.fillStyle(0x94a3b8, 1);
-    this.world.fillRect(this.liftX - 54, this.catcherY - 156, 108, 10);
-    this.world.fillRect(this.liftX - 54, this.catcherY - 20, 108, 10);
-  }
-
-  private drawCatcher() {
-    this.catcher.clear();
-    this.catcher.setPosition(this.catcherX, this.catcherY);
-
-    this.catcher.lineStyle(2, 0x7dd3fc, 0.55);
-    this.catcher.strokeCircle(0, -18, this.netRadius);
-    this.catcher.fillStyle(0x38bdf8, 0.16);
-    this.catcher.fillCircle(0, -18, this.netRadius);
-    this.catcher.lineStyle(4, 0xeab308, 1);
-    this.catcher.lineBetween(-30, 4, -14, -16);
-    this.catcher.lineBetween(30, 4, 14, -16);
-    this.catcher.lineStyle(5, 0xfacc15, 1);
-    this.catcher.strokeRoundedRect(-34, -21, 68, 22, 8);
-    this.catcher.fillStyle(0x1f2937, 1);
-    this.catcher.fillRoundedRect(-24, 2, 48, 16, 5);
-  }
-
-  private drawLift() {
-    this.lift.clear();
-    this.lift.setPosition(this.liftX, this.catcherY - 83);
-
-    const progressHeight = Math.round(88 * this.liftProgress);
-    this.lift.fillStyle(0xd97706, 1);
-    this.lift.fillRoundedRect(-42, -46, 84, 92, 7);
-    this.lift.fillStyle(0xfef3c7, 1);
-    this.lift.fillRoundedRect(-32, -36, 64, 72, 5);
-    this.lift.fillStyle(0x22c55e, 0.78);
-    this.lift.fillRect(-32, 36 - progressHeight, 64, progressHeight);
-    this.lift.lineStyle(4, 0x451a03, 1);
-    this.lift.strokeRoundedRect(-42, -46, 84, 92, 7);
-    this.liftText.setText(`${this.liftQueue.length}/${this.liftCapacity}`);
-  }
-
-  private netCost() {
-    return Math.round(10 + (this.netRadius - 32) * 1.8);
-  }
-
-  private carryCost() {
-    return 14 + (this.carryCapacity - 1) * 18;
-  }
-
-  private liftCost() {
-    return 16 + (this.liftCapacity - 2) * 20;
-  }
-
-  private motorCost() {
-    return Math.round(14 + (this.liftSpeed - 1) * 72);
+    this.scoreText.setPosition(24, 20);
+    this.livesText.setPosition(width - 24, 20);
+    this.comboText.setPosition(width / 2, 64);
+    this.waveText.setPosition(width / 2, 130);
+    this.overText.setPosition(width / 2, height / 2 - 40);
+    this.restartHint.setPosition(width / 2, height / 2 + 40);
   }
 }

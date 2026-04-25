@@ -15,14 +15,14 @@ export class MenuScene extends Phaser.Scene {
 
   create() {
     this.backdrop = this.add.rectangle(0, 0, 10, 10, COLORS.background);
-    this.title = addText(this, 0, 0, 'Respawn Department', {
+    this.title = addText(this, 0, 0, 'NECROMANCER', {
       fontFamily: FONT,
       fontSize: '72px',
       color: COLORS.text,
       fontStyle: '800',
     }).setOrigin(0.5);
 
-    this.subtitle = addText(this, 0, 0, 'the platformer starts after the fall', {
+    this.subtitle = addText(this, 0, 0, 'type the letter to revive', {
       fontFamily: FONT,
       fontSize: '20px',
       color: COLORS.muted,
